@@ -1,7 +1,12 @@
+import os
+from pathlib import Path
 from app.services.job_processor import process_bulk_certificate_job
 
-def test_create_job(client):
-    """Test creating a valid certificate generation job via API."""
+def test_creating_a_generation_job(client):
+    """
+    Requirement 1: Creating a generation job.
+    Submits a bulk certificate generation request and verifies 202 Accepted response.
+    """
     payload = {
         "title": "Data Engineering & AI Masterclass",
         "issuer": "BCG Learning Academy",
@@ -20,8 +25,11 @@ def test_create_job(client):
     assert data["status"] in ["PENDING", "PROCESSING", "COMPLETED"]
 
 def test_input_validation(client):
-    """Test input validation for empty recipients or missing title."""
-    # Empty recipient list
+    """
+    Requirement 2: Input validation.
+    Verifies that empty recipient lists, blank titles, or invalid payloads are rejected with HTTP 422.
+    """
+    # 1. Empty recipient list rejected
     response = client.post("/api/v1/jobs", json={
         "title": "Course",
         "issuer": "BCG",
@@ -30,17 +38,20 @@ def test_input_validation(client):
     })
     assert response.status_code == 422 # Unprocessable Entity
 
-    # Missing title
+    # 2. Blank title rejected
     response = client.post("/api/v1/jobs", json={
-        "title": " ",
+        "title": "   ",
         "issuer": "BCG",
         "issue_date": "2026-10-09",
         "recipients": [{"name": "Alice", "email": "alice@example.com"}]
     })
     assert response.status_code == 422
 
-def test_job_processing_and_certificate_generation(client, db_session):
-    """Test complete end-to-end background job execution and PDF rendering."""
+def test_certificate_generation(client, db_session):
+    """
+    Requirement 3: Certificate generation.
+    Verifies that certificates are generated based on the predefined template with recipient info.
+    """
     payload = {
         "title": "Python Developer Certification",
         "issuer": "Aereo Academy",
@@ -53,37 +64,67 @@ def test_job_processing_and_certificate_generation(client, db_session):
     assert create_res.status_code == 202
     job_id = create_res.json()["id"]
 
-    # Execute job processing synchronously for unit test verification using the shared db_session
+    # Process job synchronously
     process_bulk_certificate_job(job_id, db=db_session)
 
-    # Fetch updated job status
     status_res = client.get(f"/api/v1/jobs/{job_id}")
-    assert status_res.status_code == 200
     job_data = status_res.json()
-
-    assert job_data["status"] == "COMPLETED"
-    assert job_data["total_recipients"] == 1
-    assert job_data["processed_count"] == 1
-    assert job_data["success_count"] == 1
-    assert job_data["failure_count"] == 0
-    assert job_data["progress_percentage"] == 100.0
-
-    # Verify certificate record
     cert = job_data["certificates"][0]
+
     assert cert["recipient_name"] == "Charlie Brown"
     assert cert["status"] == "SUCCESS"
     assert cert["certificate_number"].startswith("CERT-")
     assert cert["download_url"] is not None
 
-def test_individual_certificate_failure(client, db_session):
-    """Test partial failure handling when an individual recipient has invalid data."""
+def test_job_status_progress(client, db_session):
+    """
+    Requirement 4: Job status/progress.
+    Verifies that the client can check the progress/result of the request.
+    """
+    payload = {
+        "title": "Cloud Architecture Program",
+        "issuer": "BCG Academy",
+        "issue_date": "2026-10-09",
+        "recipients": [
+            {"name": "User One", "email": "user1@example.com"},
+            {"name": "User Two", "email": "user2@example.com"}
+        ]
+    }
+    create_res = client.post("/api/v1/jobs", json=payload)
+    job_id = create_res.json()["id"]
+
+    # Initial status check (PENDING or PROCESSING)
+    initial_res = client.get(f"/api/v1/jobs/{job_id}")
+    assert initial_res.status_code == 200
+    assert initial_res.json()["total_recipients"] == 2
+
+    # Run processing
+    process_bulk_certificate_job(job_id, db=db_session)
+
+    # Completed status check
+    completed_res = client.get(f"/api/v1/jobs/{job_id}")
+    data = completed_res.json()
+    assert data["status"] == "COMPLETED"
+    assert data["total_recipients"] == 2
+    assert data["processed_count"] == 2
+    assert data["success_count"] == 2
+    assert data["failure_count"] == 0
+    assert data["progress_percentage"] == 100.0
+    assert data["completed_at"] is not None
+
+def test_handling_individual_certificate_failure(client, db_session):
+    """
+    Requirement 5: Handling an individual certificate failure.
+    Verifies that a failure while generating one certificate does not prevent other valid
+    certificates in the same job from being generated.
+    """
     payload = {
         "title": "Resilient Systems Engineering",
         "issuer": "BCG & Aereo",
         "issue_date": "2026-10-09",
         "recipients": [
             {"name": "Valid Recipient One", "email": "valid1@example.com"},
-            {"name": "Invalid Recipient Two", "email": "not-a-valid-email-format"}, # Invalid email format
+            {"name": "Invalid Recipient Two", "email": "not-a-valid-email-format"}, # Invalid format
             {"name": "Valid Recipient Three", "email": "valid3@example.com"}
         ]
     }
@@ -91,14 +132,13 @@ def test_individual_certificate_failure(client, db_session):
     assert create_res.status_code == 202
     job_id = create_res.json()["id"]
 
-    # Run processing worker
+    # Run processing
     process_bulk_certificate_job(job_id, db=db_session)
 
-    # Inspect job status
     status_res = client.get(f"/api/v1/jobs/{job_id}")
     job_data = status_res.json()
 
-    # Total recipients = 3, Success = 2, Failure = 1 -> Overall status = PARTIALLY_FAILED
+    # Total = 3, Success = 2, Failure = 1 -> Status = PARTIALLY_FAILED
     assert job_data["status"] == "PARTIALLY_FAILED"
     assert job_data["total_recipients"] == 3
     assert job_data["processed_count"] == 3
@@ -115,8 +155,11 @@ def test_individual_certificate_failure(client, db_session):
     assert failed_certs[0]["recipient_name"] == "Invalid Recipient Two"
     assert "Invalid email format" in failed_certs[0]["error_reason"]
 
-def test_retrieve_generated_certificates(client, db_session):
-    """Test downloading individual PDF certificate and downloading ZIP archive."""
+def test_retrieving_generated_certificates(client, db_session):
+    """
+    Requirement 6: Retrieving generated certificates.
+    Verifies that generated certificates can be retrieved individually and as a ZIP bundle.
+    """
     payload = {
         "title": "Cloud Native Architecture",
         "issuer": "BCG Cloud Labs",
