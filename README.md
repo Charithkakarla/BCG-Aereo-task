@@ -236,6 +236,8 @@ BCG-Aereo-task/
 │   ├── services/
 │   │   ├── certificate_generator.py # ReportLab PDF canvas generator
 │   │   └── job_processor.py         # Async background worker & failure isolator
+│   ├── static/
+│   │   └── index.html          # Web UI dashboard
 │   ├── config.py               # Configuration & storage paths
 │   ├── database.py             # SQLAlchemy session manager & connection pool
 │   └── main.py                 # FastAPI application entry point & CORS
@@ -247,3 +249,14 @@ BCG-Aereo-task/
 ├── pytest.ini                  # Pytest configuration
 └── README.md                   # Project documentation
 ```
+
+---
+
+## Future Scope
+
+- **Distributed Task Queue**: Offload batch processing to Celery with Redis / RabbitMQ brokers for multi-worker horizontal scaling across server clusters.
+- **Cloud Object Storage**: Persist generated certificate PDFs to AWS S3 / Google Cloud Storage with expiring pre-signed URLs instead of local disk storage.
+- **Automated Email Dispatch**: Asynchronously email generated PDF certificates directly to recipient addresses upon batch completion.
+- **Authentication & Rate Limiting**: Implement API key / JWT authentication and token-bucket rate limiting for secure multi-tenant deployments.
+- **Dynamic Template Engine**: Support customizable Jinja2 / HTML templates with user-uploaded branding, custom fonts, and dynamic layouts.
+- **Webhook Notifications**: Deliver webhook callbacks to client servers upon job completion to eliminate client polling.
