@@ -27,14 +27,14 @@ class JobModel(Base):
     title = Column(String(255), nullable=False)
     issuer = Column(String(255), nullable=False)
     issue_date = Column(String(50), nullable=False)
-    status = Column(String(20), default=JobStatus.PENDING.value, nullable=False)
+    status = Column(String(20), default=JobStatus.PENDING.value, nullable=False, index=True)
     
     total_recipients = Column(Integer, default=0, nullable=False)
     processed_count = Column(Integer, default=0, nullable=False)
     success_count = Column(Integer, default=0, nullable=False)
     failure_count = Column(Integer, default=0, nullable=False)
     
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     completed_at = Column(DateTime, nullable=True)
     
     certificates = relationship("CertificateModel", back_populates="job", cascade="all, delete-orphan")
@@ -43,17 +43,17 @@ class CertificateModel(Base):
     __tablename__ = "certificates"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
     
     recipient_name = Column(String(255), nullable=False)
     recipient_email = Column(String(255), nullable=False)
     custom_text = Column(String(255), nullable=True)
     
-    status = Column(String(20), default=CertificateStatus.PENDING.value, nullable=False)
-    certificate_number = Column(String(50), unique=True, nullable=True)
+    status = Column(String(20), default=CertificateStatus.PENDING.value, nullable=False, index=True)
+    certificate_number = Column(String(50), unique=True, nullable=True, index=True)
     file_path = Column(Text, nullable=True)
     error_reason = Column(Text, nullable=True)
     
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     
     job = relationship("JobModel", back_populates="certificates")

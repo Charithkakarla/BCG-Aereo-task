@@ -36,8 +36,9 @@ def build_cert_response(cert: CertificateModel, request_host: str = "") -> Certi
         created_at=cert.created_at
     )
 
-def build_job_response(job: JobModel) -> JobProgressResponse:
-    cert_responses = [build_cert_response(c) for c in job.certificates]
+def build_job_response(job: JobModel, max_certs: int = 100) -> JobProgressResponse:
+    cert_list = job.certificates[:max_certs] if len(job.certificates) > max_certs else job.certificates
+    cert_responses = [build_cert_response(c) for c in cert_list]
     
     progress_pct = 0.0
     if job.total_recipients > 0:
@@ -88,16 +89,18 @@ def create_certificate_job(
     db.add(job)
     db.flush() # populated job.id
 
-    # 2. Create Certificate records
-    for recipient in request.recipients:
-        cert = CertificateModel(
+    # 2. Bulk create Certificate records (optimized for high scale)
+    cert_objects = [
+        CertificateModel(
             job_id=job.id,
             recipient_name=recipient.name,
             recipient_email=recipient.email,
             custom_text=recipient.custom_text,
             status=CertificateStatus.PENDING.value
         )
-        db.add(cert)
+        for recipient in request.recipients
+    ]
+    db.bulk_save_objects(cert_objects)
 
     db.commit()
     db.refresh(job)

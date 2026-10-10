@@ -47,50 +47,62 @@ def process_bulk_certificate_job(job_id: str, db: Session = None):
         job_dir = settings.CERTIFICATES_PATH / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
 
-        certificates = db.query(CertificateModel).filter(CertificateModel.job_id == job_id).all()
+        offset = 0
+        chunk_size = 500
 
-        for cert in certificates:
-            try:
-                # 1. Recipient level data validation
-                val_error = validate_recipient_data(cert.recipient_name, cert.recipient_email)
-                if val_error:
+        while True:
+            certificates = db.query(CertificateModel).filter(
+                CertificateModel.job_id == job_id
+            ).order_by(CertificateModel.id).offset(offset).limit(chunk_size).all()
+
+            if not certificates:
+                break
+
+            for cert in certificates:
+                try:
+                    # 1. Recipient level data validation
+                    val_error = validate_recipient_data(cert.recipient_name, cert.recipient_email)
+                    if val_error:
+                        cert.status = CertificateStatus.FAILED.value
+                        cert.error_reason = val_error
+                        job.failure_count += 1
+                        continue
+
+                    # 2. Assign unique certificate ID
+                    cert_number = generate_cert_number()
+                    cert.certificate_number = cert_number
+
+                    # 3. Generate PDF
+                    pdf_filename = f"{cert.id}.pdf"
+                    pdf_path = job_dir / pdf_filename
+
+                    generate_pdf_certificate(
+                        output_path=pdf_path,
+                        recipient_name=cert.recipient_name,
+                        course_title=job.title,
+                        issuer=job.issuer,
+                        issue_date=job.issue_date,
+                        certificate_number=cert_number,
+                        custom_text=cert.custom_text
+                    )
+
+                    # 4. Mark Success
+                    cert.status = CertificateStatus.SUCCESS.value
+                    cert.file_path = str(pdf_path)
+                    job.success_count += 1
+
+                except Exception as e:
+                    # Failure isolation: catch error without stopping rest of batch
                     cert.status = CertificateStatus.FAILED.value
-                    cert.error_reason = val_error
+                    cert.error_reason = f"PDF Generation Exception: {str(e)}"
                     job.failure_count += 1
-                    continue
 
-                # 2. Assign unique certificate ID
-                cert_number = generate_cert_number()
-                cert.certificate_number = cert_number
+                finally:
+                    job.processed_count += 1
 
-                # 3. Generate PDF
-                pdf_filename = f"{cert.id}.pdf"
-                pdf_path = job_dir / pdf_filename
-
-                generate_pdf_certificate(
-                    output_path=pdf_path,
-                    recipient_name=cert.recipient_name,
-                    course_title=job.title,
-                    issuer=job.issuer,
-                    issue_date=job.issue_date,
-                    certificate_number=cert_number,
-                    custom_text=cert.custom_text
-                )
-
-                # 4. Mark Success
-                cert.status = CertificateStatus.SUCCESS.value
-                cert.file_path = str(pdf_path)
-                job.success_count += 1
-
-            except Exception as e:
-                # Failure isolation: catch error without stopping rest of batch
-                cert.status = CertificateStatus.FAILED.value
-                cert.error_reason = f"PDF Generation Exception: {str(e)}"
-                job.failure_count += 1
-
-            finally:
-                job.processed_count += 1
-                db.commit()
+            # Commit batch of chunk_size to database
+            db.commit()
+            offset += chunk_size
 
         # 5. Determine final job status
         if job.failure_count == 0:
@@ -102,21 +114,25 @@ def process_bulk_certificate_job(job_id: str, db: Session = None):
 
         job.completed_at = datetime.now(timezone.utc)
 
-        # 6. Create ZIP bundle for successful certificates
+        # 6. Create ZIP bundle for successful certificates (optimized lightweight query)
         if job.success_count > 0:
             zip_filename = f"job_{job.id}.zip"
             zip_path = settings.ZIPS_PATH / zip_filename
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                successful_certs = db.query(CertificateModel).filter(
+                successful_certs = db.query(
+                    CertificateModel.file_path,
+                    CertificateModel.recipient_name,
+                    CertificateModel.certificate_number
+                ).filter(
                     CertificateModel.job_id == job_id,
                     CertificateModel.status == CertificateStatus.SUCCESS.value
                 ).all()
-                for sc in successful_certs:
-                    if sc.file_path and os.path.exists(sc.file_path):
+                for file_path, r_name, cert_num in successful_certs:
+                    if file_path and os.path.exists(file_path):
                         # Clean arcname for inside ZIP (RecipientName_CertID.pdf)
-                        safe_name = "".join(c for c in sc.recipient_name if c.isalnum() or c in (' ', '_', '-')).strip()
-                        arc_name = f"{safe_name}_{sc.certificate_number}.pdf"
-                        zipf.write(sc.file_path, arcname=arc_name)
+                        safe_name = "".join(c for c in r_name if c.isalnum() or c in (' ', '_', '-')).strip()
+                        arc_name = f"{safe_name}_{cert_num}.pdf"
+                        zipf.write(file_path, arcname=arc_name)
 
         db.commit()
 
